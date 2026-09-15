@@ -11,3 +11,4 @@ wheels/
 
 # Cluv results symlink (points to $SCRATCH, per-cluster)
 logs/
+/logs
