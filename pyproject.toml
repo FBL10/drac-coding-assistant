@@ -1,0 +1,127 @@
+[project]
+name = "drac-coding-assistant"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = []
+
+[project.scripts]
+drac-coding-assistant = "drac_coding_assistant:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.cluv]
+# All variables below can be overridden per cluster (except data_source).
+
+# Job script to use by default when one isn't passed to the `submit` command, on all clusters.
+# Can also be overridden per job submission.
+job_script_path = "scripts/job.sh"
+
+# Where to store job results by default.
+results_path = "$SCRATCH/logs/drac_coding_assistant"
+
+# On clusters, Cluv creates a symlink (a shortcut) in your project folder to the results_path dir.
+# This makes it easier to keep your project in $HOME and to see the results which are on $SCRATCH.
+results_symlink = "logs"
+
+## The path where the project should be replicated on remote clusters.
+# project_dir = "$HOME/<project_name>"
+
+## Where to read the data from when synchronizing data to all clusters.
+# data_source = "<cluster>:<dataset_path_on_the_cluster>"
+
+## Where the dataset should be replicated on all clusters.
+# datasets_path = "<path_to_copy_datasets_on_all_clusters>"
+
+[tool.cluv.env]
+# Environment variables applied when using Slurm commands on all clusters.
+# Assume that compute nodes don't have internet access by default. Override below when they do.
+UV_OFFLINE = "1"
+WANDB_MODE = "offline"
+
+[tool.cluv.local]
+# Settings (environment variables) applied when using cluv on a local machine (not on a Slurm cluster).
+# Fake "$SCRATCH" directory to use when not on a Slurm cluster.
+# This makes the examples runnable either from a laptop or from a Slurm cluster.
+env = { SCRATCH = "$HOME/scratch" }
+
+[tool.cluv.sbatch_args]
+# sbatch flags applied on all clusters. CLI-supplied flags take precedence.
+time = "3:00:00"
+requeue = true
+
+###  --------------   Clusters Config   --------------  ###
+
+[tool.cluv.clusters.tamia]
+# TamIA (PAICE, Mila/Calcul Quebec). Whole-node scheduling: each job MUST use
+# all 4 GPUs on every allocated node (H100-80GB SXM, 4/node). Max 24h/job.
+# No internet on compute nodes: pre-download weights on login node.
+# Qwen3.8-27B-FP8 fits on 1 GPU, but we must request 4; serve with TP=1
+# (wastes 3 GPUs) or TP=4. Requires AIP-type RAP.
+job_script_path = "scripts/vllm-serve.sh"
+sbatch_args = { account = "aip-azouaq", gpus-per-node = "h100:4", cpus-per-task = 48, mem = "0" }
+
+[tool.cluv.clusters.killarney]
+# Killarney (PAICE, Vector/SciNet): NOT an H100-first choice for this project.
+# Standard tier: 4x L40s-48GB/node (168 nodes). Perf tier: 8x H100-SXM/node (10 nodes).
+# Qwen3.8-27B-FP8 fits on 1x L40s-48GB, but excluded per H100-only selection.
+# Account uncertain (def- vs aip-); assuming aip-azouaq for PAICE. Verify with `ssh killarney 'sacctmgr show assoc user=$USER'`.
+# For perf tier, override on CLI: cluv submit killarney --gpus=h100:1 ...
+results_path = "$HOME/logs/cluv"
+sbatch_args = { account = "aip-azouaq" }
+
+[tool.cluv.clusters.vulcan]
+# Vulcan (PAICE, Amii/U Alberta): 205 nodes x 4x L40s-48GB. No internet on compute.
+# Qwen3.8-27B-FP8 fits on 1x L40s, but excluded per H100-only selection.
+# Account uncertain; assuming aip-azouaq. Verify with `ssh vulcan 'sacctmgr show assoc user=$USER'`.
+sbatch_args = { account = "aip-azouaq" }
+
+[tool.cluv.clusters.rorqual]
+# Rorqual: successor to Beluga. 81 GPU nodes x 4x H100-80GB (324 total).
+# Half the GPUs are MIG-sliced; request a full H100 with --gpus=h100:1.
+# No internet on compute nodes: pre-download weights on login node.
+# Qwen3.8-27B-FP8 (~30GB) fits easily on 1x H100-80GB.
+job_script_path = "scripts/vllm-serve.sh"
+sbatch_args = { account = "def-azouaq", gpus = "h100:1", cpus-per-task = 12, mem = "64G" }
+# With more than one allocation on a cluster, `cluv submit rorqual` submits one job per allocation
+# and keeps the first one that starts, cancelling the others:
+# sbatch_args = [{ account = "def-azouaq" }, { account = "aip-azouaq" }]
+
+[tool.cluv.clusters.fir]
+# Fir: successor to Cedar. ~160 GPU nodes x 4x H100-80GB (640 total).
+# Compute nodes HAVE internet: vLLM can pull weights directly.
+# Qwen3.8-27B-FP8 fits on 1x H100-80GB.
+env = { UV_OFFLINE = "0", WANDB_MODE = "online" }
+job_script_path = "scripts/vllm-serve.sh"
+sbatch_args = { account = "def-azouaq", gpus = "h100:1", cpus-per-task = 12, mem = "64G" }
+
+[tool.cluv.clusters.nibi]
+# Nibi: successor to Graham. 36 GPU nodes x 8x H100-80GB (288 total).
+# Only cluster with 8 GPUs/node; the rest have 4/node.
+# Compute nodes HAVE internet.
+env = { UV_OFFLINE = "0", WANDB_MODE = "online" }
+job_script_path = "scripts/vllm-serve.sh"
+sbatch_args = { account = "def-azouaq", gpus = "h100:1", cpus-per-task = 12, mem = "64G" }
+
+[tool.cluv.clusters.trillium]
+# Trillium CPU subcluster (1224 CPU-only nodes). Not suitable for LLM serving.
+# Use trillium-gpu below for vLLM.
+sbatch_args = { account = "def-azouaq" }
+
+[tool.cluv.clusters.trillium-gpu]
+# Trillium-GPU: successor to Niagara/Mist. 63 nodes x 4x H100-80GB (252 total).
+# 96 AMD Genoa cores + 768GB RAM per GPU node. No internet on compute nodes.
+# Cluster-specific Slurm rules (verified on submit): use --gpus-per-node
+# (NOT --gpus), and NO --mem flag (fixed 186 GiB/GPU).
+# Qwen3.8-27B-FP8 fits on 1x H100-80GB.
+job_script_path = "scripts/vllm-serve.sh"
+sbatch_args = { account = "def-azouaq", gpus-per-node = "h100:1", cpus-per-task = 12 }
+
+[tool.cluv.clusters.narval]
+# Narval: NOT upgraded (legacy). 636x A100-40GB, 4 per node. No internet on compute.
+# Qwen3.8-27B-FP8 can fit on 1-2x A100-40GB, but H100 clusters above are preferred.
+# Kept for fallback only; no GPU request by default.
+sbatch_args = { account = "def-azouaq" }
