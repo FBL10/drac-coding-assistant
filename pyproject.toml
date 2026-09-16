@@ -41,6 +41,11 @@ results_symlink = "logs"
 # Assume that compute nodes don't have internet access by default. Override below when they do.
 UV_OFFLINE = "1"
 WANDB_MODE = "offline"
+# Offline-compute clusters (rorqual/tamia/trillium-gpu) must resolve weights from
+# $SCRATCH cache only. WITHOUT this, vLLM hangs ~20 min in Hub retries
+# ("Error retrieving file list: Connection timed out") and the idle killswitch
+# murders it mid-load (tamia 466697, FAILED after 25m41s). Per-cluster below.
+HF_HUB_OFFLINE = "1"
 
 [tool.cluv.local]
 # Settings (environment variables) applied when using cluv on a local machine (not on a Slurm cluster).
@@ -94,7 +99,7 @@ sbatch_args = { account = "def-azouaq", gpus = "h100:4", cpus-per-task = 12, mem
 # Fir: successor to Cedar. ~160 GPU nodes x 4x H100-80GB (640 total).
 # Compute nodes HAVE internet: vLLM can pull weights directly.
 # 4-GPU single-node (TP=4) for 256k context (262144 x 32).
-env = { UV_OFFLINE = "0", WANDB_MODE = "online" }
+env = { UV_OFFLINE = "0", WANDB_MODE = "online", HF_HUB_OFFLINE = "0" }
 job_script_path = "scripts/vllm-serve.sh"
 sbatch_args = { account = "def-azouaq", gpus = "h100:4", cpus-per-task = 12, mem = "64G" }
 
@@ -103,7 +108,8 @@ sbatch_args = { account = "def-azouaq", gpus = "h100:4", cpus-per-task = 12, mem
 # Only cluster with 8 GPUs/node; the rest have 4/node.
 # Compute nodes HAVE internet.
 # 4-GPU single-node (TP=4) for 256k context (262144 x 32); bump to h100:8 for max headroom.
-env = { UV_OFFLINE = "0", WANDB_MODE = "online" }
+# Weights verified cached (29G, snapshot 017b9c7a) so compute stays offline.
+env = { UV_OFFLINE = "0", WANDB_MODE = "online", HF_HUB_OFFLINE = "1" }
 job_script_path = "scripts/vllm-serve.sh"
 sbatch_args = { account = "def-azouaq", gpus = "h100:4", cpus-per-task = 12, mem = "64G" }
 

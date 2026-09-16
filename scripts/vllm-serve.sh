@@ -128,8 +128,23 @@ echo "vllm binary: $VLLM_BIN ($("$VLLM_BIN" --version 2>/dev/null || echo 'versi
     --reasoning-parser qwen3 &
 VLLM=$!
 
-# Grace period: let weights download/load before arming the killswitch.
-sleep "${GRACE_PERIOD:-900}"
+# Readiness gate: arm the idle killswitch ONLY after the endpoint answers.
+# A fixed grace period murders slow loads: 256k startup (weights + KV profiling
+# + torch.compile) sits at 0% GPU util for 20-40+ min, and tamia 466697 was
+# killed at 25m41s (900s grace + 600s idle) mid-load. Poll localhost instead.
+READY_TIMEOUT="${READY_TIMEOUT:-5400}"
+_t0=$(date +%s)
+while ! curl -s -m 5 "http://127.0.0.1:$PORT/v1/models" 2>/dev/null | grep -q '"data"'; do
+    if ! kill -0 $VLLM 2>/dev/null; then
+        echo "vllm process exited during load (see traceback above)"
+        break
+    fi
+    if (( $(date +%s) - _t0 > READY_TIMEOUT )); then
+        echo "WARNING: endpoint not ready after ${READY_TIMEOUT}s, arming idle watchdog anyway"
+        break
+    fi
+    sleep 30
+done
 
 idle=0
 while kill -0 $VLLM 2>/dev/null; do
