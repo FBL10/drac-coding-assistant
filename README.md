@@ -11,13 +11,14 @@ Model + runtime (identical on all clusters, verified 2026-09-15):
 - Runtime: `uv venv $SCRATCH/vllm-env && uv pip install vllm` → vLLM **0.29.0**.
   (Trillium-gpu only: venv is `$SCRATCH/vllm-env-313`, built with
   `uv venv --python 3.13` — see retry notes.)
-- Serve flags that matter (see `scripts/vllm-serve.sh`):
-  `--tensor-parallel-size 1 --max-model-len 32768 --max-num-seqs 512
+- Serve flags that matter (see `scripts/vllm-serve.sh`, defaults):
+  `--tensor-parallel-size 4 --max-model-len 262144 --max-num-seqs 32
   --kv-cache-dtype fp8 --enable-auto-tool-choice --tool-call-parser qwen3_coder
-  --reasoning-parser qwen3`, plus `module load cuda/12.6` (Trillium:
+  --reasoning-parser qwen3` on 4×H100 single-node, plus `module load cuda/12.6` (Trillium:
   `module load StdEnv/2023 gcc/12.3 cuda/12.6`), `VLLM_USE_DEEP_GEMM=0`,
   and all caches on `$SCRATCH` (`HF_HOME`, `TRITON_CACHE_DIR`,
   `VLLM_CACHE_ROOT/CONFIG_ROOT`, `FLASHINFER_WORKSPACE_BASE`).
+  (256k native context; KV scales as len × seqs, hence 32 concurrent seqs.)
 
 ## Cluster status
 
@@ -34,13 +35,13 @@ Slurm quirks (already in `pyproject.toml` + `scripts/vllm-serve.sh`):
 - Trillium-gpu: `--gpus-per-node` (not `--gpus`), **no `--mem`** flag,
   needs `StdEnv/2023 gcc/12.3` before cuda, `$HOME` read-only on GPU nodes.
 - Tamia: whole-node allocation → `--gpus-per-node=h100:4 --cpus-per-task=48 --mem=0`
-  (model still served with `--tensor-parallel-size 1`).
+  (model served with `--tensor-parallel-size 4`, auto-detected).
 
 ## Retrying fir (expected to just work)
 
 ```bash
 cluv enable fir
-cluv submit fir   # or: sbatch with --gpus=h100:1 --cpus-per-task=12 --mem=64G --account=def-azouaq
+cluv submit fir   # or: sbatch with --gpus=h100:4 --cpus-per-task=12 --mem=64G --account=def-azouaq
 # watch: squeue -u $USER ; tail -f $SCRATCH/vllm-test*.log
 # verify: curl http://<node>:8000/v1/models
 ```

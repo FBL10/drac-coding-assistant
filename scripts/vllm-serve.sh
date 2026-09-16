@@ -8,8 +8,9 @@
 # --gpus-per-node=h100:4.) For direct sbatch, pass them on the CLI, e.g.:
 #   sbatch --gpus=h100:1 --cpus-per-task=12 --mem=64G --account=def-azouaq scripts/vllm-serve.sh
 # NOTE: cluv sbatch_args in pyproject.toml override the above on submit.
-# Tamia requests --gpus=h100:4 --cpus-per-task=48 --mem=0 (whole node).
-# Rorqual/Fir/Nibi/Trillium-gpu request --gpus=h100:1.
+# All H100 clusters request 4 GPUs single-node (tamia: whole-node
+# --gpus=h100:4; rorqual/fir/nibi: --gpus=h100:4; trillium-gpu:
+# --gpus-per-node=h100:1); TP auto-detects (=4).
 #
 # Usage:
 #   cluv submit fir                      # uses this script via job_script_path
@@ -39,8 +40,22 @@ if command -v module &>/dev/null; then
     || module load cuda 2>/dev/null || true
 fi
 
-MODEL="${1:-${MODEL:-Qwen/Qwen3.8-27B-FP8}}"
+MODEL="${MODEL:-Qwen/Qwen3.8-27B-FP8}"
 PORT="${PORT:-8000}"
+# Long-context overrides, e.g.: cluv submit nibi scripts/vllm-serve.sh -- \
+#   --max-model-len 131072 --max-num-seqs 32
+# (env still works too: MAX_MODEL_LEN=... MAX_NUM_SEQS=... TP_SIZE=... PORT=...).
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --max-model-len) MAX_MODEL_LEN="$2"; shift 2;;
+        --max-num-seqs) MAX_NUM_SEQS="$2"; shift 2;;
+        --tp|--tensor-parallel-size) TP_SIZE="$2"; shift 2;;
+        --port) PORT="$2"; shift 2;;
+        --model) MODEL="$2"; shift 2;;
+        --help) echo "usage: vllm-serve.sh [--model M] [--max-model-len N] [--max-num-seqs N] [--tp N] [--port P]"; exit 0;;
+        *) MODEL="$1"; shift;;  # bare first arg stays the model for back-compat
+    esac
+done
 # Tensor-parallel size: default to allocated GPU count (1 on fir/nibi/rorqual/trillium-gpu, 4 on tamia).
 if command -v nvidia-smi &>/dev/null; then
     N_GPUS=$(nvidia-smi -L 2>/dev/null | wc -l | tr -d ' ')
@@ -48,11 +63,13 @@ else
     N_GPUS=1
 fi
 TP_SIZE="${TP_SIZE:-$N_GPUS}"
-MAX_MODEL_LEN="${MAX_MODEL_LEN:-32768}"
-# Qwen3.8 is hybrid attention (48 linear/Mamba layers): vLLM needs one Mamba
-# cache block per decode sequence. Small --max-model-len values yield few blocks
-# (e.g. 821 at 8k), so cap --max-num-seqs (default 1024) to fit. 512 is safe here.
-MAX_NUM_SEQS="${MAX_NUM_SEQS:-512}"
+# Default serving shape: 256k native context (262144) with low concurrency (32).
+# KV memory scales as max-model-len x max-num-seqs: 256k x 512 would OOM even on
+# 4xH100, 256k x 32 fits (~same KV as the old 32k x 512). Qwen3.8 is hybrid
+# attention (48 linear/DeltaNet + 16 attention layers): vLLM needs one Mamba
+# cache block per decode sequence, hence the low --max-num-seqs.
+MAX_MODEL_LEN="${MAX_MODEL_LEN:-262144}"
+MAX_NUM_SEQS="${MAX_NUM_SEQS:-32}"
 
 # Offline clusters (rorqual/trillium-gpu/tamia) have no internet on compute:
 # use cached weights only. Fir/nibi have internet so this is a no-op there.

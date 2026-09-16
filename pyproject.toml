@@ -59,8 +59,8 @@ requeue = true
 # TamIA (PAICE, Mila/Calcul Quebec). Whole-node scheduling: each job MUST use
 # all 4 GPUs on every allocated node (H100-80GB SXM, 4/node). Max 24h/job.
 # No internet on compute nodes: pre-download weights on login node.
-# Qwen3.8-27B-FP8 fits on 1 GPU, but we must request 4; serve with TP=1
-# (wastes 3 GPUs) or TP=4. Requires AIP-type RAP.
+# Qwen3.8-27B-FP8 served at 256k (262144 x 32): needs 4 GPUs for KV headroom.
+# Serve TP=4 (script auto-detects GPU count). Requires AIP-type RAP.
 job_script_path = "scripts/vllm-serve.sh"
 sbatch_args = { account = "aip-azouaq", gpus-per-node = "h100:4", cpus-per-task = 48, mem = "0" }
 
@@ -81,11 +81,11 @@ sbatch_args = { account = "aip-azouaq" }
 
 [tool.cluv.clusters.rorqual]
 # Rorqual: successor to Beluga. 81 GPU nodes x 4x H100-80GB (324 total).
-# Half the GPUs are MIG-sliced; request a full H100 with --gpus=h100:1.
+# Half the GPUs are MIG-sliced; request full H100s with --gpus=h100:4.
 # No internet on compute nodes: pre-download weights on login node.
-# Qwen3.8-27B-FP8 (~30GB) fits easily on 1x H100-80GB.
+# 4-GPU single-node (TP=4) for 256k context (262144 x 32).
 job_script_path = "scripts/vllm-serve.sh"
-sbatch_args = { account = "def-azouaq", gpus = "h100:1", cpus-per-task = 12, mem = "64G" }
+sbatch_args = { account = "def-azouaq", gpus = "h100:4", cpus-per-task = 12, mem = "64G" }
 # With more than one allocation on a cluster, `cluv submit rorqual` submits one job per allocation
 # and keeps the first one that starts, cancelling the others:
 # sbatch_args = [{ account = "def-azouaq" }, { account = "aip-azouaq" }]
@@ -93,18 +93,19 @@ sbatch_args = { account = "def-azouaq", gpus = "h100:1", cpus-per-task = 12, mem
 [tool.cluv.clusters.fir]
 # Fir: successor to Cedar. ~160 GPU nodes x 4x H100-80GB (640 total).
 # Compute nodes HAVE internet: vLLM can pull weights directly.
-# Qwen3.8-27B-FP8 fits on 1x H100-80GB.
+# 4-GPU single-node (TP=4) for 256k context (262144 x 32).
 env = { UV_OFFLINE = "0", WANDB_MODE = "online" }
 job_script_path = "scripts/vllm-serve.sh"
-sbatch_args = { account = "def-azouaq", gpus = "h100:1", cpus-per-task = 12, mem = "64G" }
+sbatch_args = { account = "def-azouaq", gpus = "h100:4", cpus-per-task = 12, mem = "64G" }
 
 [tool.cluv.clusters.nibi]
 # Nibi: successor to Graham. 36 GPU nodes x 8x H100-80GB (288 total).
 # Only cluster with 8 GPUs/node; the rest have 4/node.
 # Compute nodes HAVE internet.
+# 4-GPU single-node (TP=4) for 256k context (262144 x 32); bump to h100:8 for max headroom.
 env = { UV_OFFLINE = "0", WANDB_MODE = "online" }
 job_script_path = "scripts/vllm-serve.sh"
-sbatch_args = { account = "def-azouaq", gpus = "h100:1", cpus-per-task = 12, mem = "64G" }
+sbatch_args = { account = "def-azouaq", gpus = "h100:4", cpus-per-task = 12, mem = "64G" }
 
 [tool.cluv.clusters.trillium]
 # Trillium CPU subcluster (1224 CPU-only nodes). Not suitable for LLM serving.
