@@ -1,0 +1,33 @@
+# Append to ~/.ssh/config. Adjust IdentityFile/User to your own; account names live in
+# pyproject.toml [tool.cluv.clusters.*] (find yours: ssh <cluster> 'sacctmgr show assoc user=$USER').
+# The ControlMaster mux below is required: cluv and the tunnel fallback reuse it,
+# and DRAC MFA blocks fresh logins (see README troubleshooting).
+
+Host rorqual fir nibi trillium trillium-gpu tamia killarney vulcan narval
+  HostName %h.alliancecan.ca
+  ControlMaster auto
+  ControlPath ~/.cache/ssh/%r@%h:%p
+  ControlPersist yes
+  User $USER
+  IdentityFile ~/.ssh/id_ed25519
+
+# Compute-node jumps (bare names like rg31801, g8, tg10702 resolve from the login node)
+Host rc????? rg????? rl?????
+  ProxyJump rorqual
+  User $USER
+
+Host fc????? fb?????
+  ProxyJump fir
+  User $USER
+
+Host c? c?? c??? g? g?? l? l?? m? m?? u?
+  ProxyJump nibi
+  User $USER
+
+Host tg????? tc?????
+  ProxyJump tamia
+  User $USER
+
+Host trig????
+  ProxyJump trillium-gpu
+  User $USER

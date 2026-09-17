@@ -16,9 +16,10 @@ build-backend = "hatchling.build"
 [tool.cluv]
 # All variables below can be overridden per cluster (except data_source).
 
-# Job script to use by default when one isn't passed to the `submit` command, on all clusters.
-# Can also be overridden per job submission.
-job_script_path = "scripts/job.sh"
+# Default job script. Per-cluster `job_script_path` below inherits this unless overridden.
+# Replace `account` values with your own allocation
+# (find yours via `ssh <cluster> 'sacctmgr show assoc user=$USER'`).
+job_script_path = "scripts/vllm-serve.sh"
 
 # Where to store job results by default.
 results_path = "$SCRATCH/logs/drac_coding_assistant"
