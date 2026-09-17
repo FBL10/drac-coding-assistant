@@ -1,6 +1,6 @@
 # DRAC coding assistant — self-hosted LLM via vLLM
 
-Serve an LLM with [vLLM](https://github.com/vllm-project/vllm) on DRAC H100
+Serve an LLM with [vLLM](https://github.com/vllm-project/vllm) on DRAC
 clusters and point [OpenCode](https://opencode.ai) at it. Cluster orchestration
 via [cluv](https://github.com/mila-iqia/cluv).
 
