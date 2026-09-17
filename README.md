@@ -6,7 +6,7 @@ via [cluv](https://github.com/mila-iqia/cluv).
 
 ## Clusters
 
-Currently tested with rorqual, tamia and nibi. fir is too slow to schedule and trillium vllm install did not work for now. Other clusters don't have H100 (killarney?) so ignored for now.
+Currently tested with rorqual, tamia and nibi. fir is too slow to schedule and trillium vllm install did not work for now. Other clusters don't have H100 (killarney?) so ignored.
 
 Slurm accounts live in `pyproject.toml` (`[tool.cluv.clusters.*.sbatch_args]`) —
 replace with your own allocation
