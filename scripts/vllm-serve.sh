@@ -114,8 +114,8 @@ while kill -0 $VLLM 2>/dev/null; do
     sleep 30
     util=$(nvidia-smi --query-gpu=utilization.gpu --format=csv,noheader,nounits | sort -rn | head -1)
     if (( util > 0 )); then idle=0; else idle=$(( idle + 30 )); fi
-    if (( idle >= ${IDLE_TIMEOUT:-600} )); then
-        echo "GPU idle for ${IDLE_TIMEOUT:-600}s, stopping vllm (job $SLURM_JOB_ID on $(hostname))"
+    if (( idle >= ${IDLE_TIMEOUT:-1800} )); then
+        echo "GPU idle for ${IDLE_TIMEOUT:-1800}s, stopping vllm (job $SLURM_JOB_ID on $(hostname))"
         kill $VLLM 2>/dev/null || true
         break
     fi
