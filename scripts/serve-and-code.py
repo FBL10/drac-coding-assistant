@@ -1,10 +1,16 @@
 #!/usr/bin/env python3
 """Serve an LLM with vLLM on DRAC H100s, tunnel it, patch opencode, launch opencode.
 
+Serving flags are generic: only the ones you pass are forwarded to
+scripts/vllm-serve.sh (unset = vLLM default). The opencode context limit is
+autodetected from /v1/models.
+
 Usage:
-    uv run --with cluster-uv scripts/serve-and-code.py --launch
-    uv run --with cluster-uv scripts/serve-and-code.py --cluster nibi --model Qwen/Qwen3.8-27B-FP8 --launch
-    uv run --with cluster-uv scripts/serve-and-code.py --no-submit --launch  # reuse newest job
+    uv run --with cluster-uv scripts/serve-and-code.py --model Qwen/Qwen3.8-27B-FP8 --launch
+    uv run --with cluster-uv scripts/serve-and-code.py --model Qwen/Qwen3.8-27B-FP8 \\
+        --max-model-len 262144 --max-num-seqs 32 --kv-cache-dtype fp8 \\
+        --tool-parser qwen3_coder --reasoning-parser qwen3 --cluster nibi --launch
+    uv run --with cluster-uv scripts/serve-and-code.py --model <id> --no-submit --launch
 """
 
 from __future__ import annotations
@@ -33,38 +39,22 @@ except ModuleNotFoundError:
     )
     raise SystemExit(2)
 
-# Per-model serving defaults. --max-model-len / --max-num-seqs / --tool-parser /
-# --reasoning-parser override these (and are forwarded to scripts/vllm-serve.sh).
-MODELS = {
-    "Qwen/Qwen3.8-27B-FP8": {
-        "max_model_len": 262144,  # 256k native context; KV ~ len x seqs
-        "max_num_seqs": 32,  # low: hybrid attention needs a Mamba block per seq
-        "tool_parser": "qwen3_coder",
-        "reasoning_parser": "qwen3",
-        "output_tokens": 8192,
-    },
-}
-DEFAULT_MODEL = "Qwen/Qwen3.8-27B-FP8"
 PORT = 8000
-ENDPOINT_TIMEOUT_S = 90 * 60  # RUNNING != ready: 256k loads take 20-45+ min
+OUTPUT_TOKENS = 8192  # opencode-side limit, model-agnostic
+ENDPOINT_TIMEOUT_S = 90 * 60  # RUNNING != ready: big-model loads take 20-45+ min
 POLL_S = 15
-
-
-def profile(model: str) -> dict:
-    return MODELS.get(model, {"max_model_len": 32768, "max_num_seqs": 32,
-                              "tool_parser": "qwen3_coder", "reasoning_parser": "qwen3",
-                              "output_tokens": 8192})
 
 
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--cluster", default="first",
                    help="'first' races all enabled H100 clusters, or name one")
-    p.add_argument("--model", default=DEFAULT_MODEL, help="HF model id")
+    p.add_argument("--model", required=True, help="HF model id, e.g. Qwen/Qwen3.8-27B-FP8")
     p.add_argument("--max-model-len", type=int, default=None)
     p.add_argument("--max-num-seqs", type=int, default=None)
-    p.add_argument("--tool-parser", default=None)
-    p.add_argument("--reasoning-parser", default=None)
+    p.add_argument("--kv-cache-dtype", default=None, help="e.g. fp8")
+    p.add_argument("--tool-parser", default=None, help="e.g. qwen3_coder")
+    p.add_argument("--reasoning-parser", default=None, help="e.g. qwen3")
     p.add_argument("--port", type=int, default=PORT)
     p.add_argument("--no-submit", action="store_true",
                    help="reuse newest cached job instead of submitting")
@@ -82,15 +72,20 @@ def parse_args() -> argparse.Namespace:
     return p.parse_args()
 
 
-def resolve(model: str, args: argparse.Namespace) -> dict:
-    prof = profile(model)
-    return {
-        "max_model_len": args.max_model_len or prof["max_model_len"],
-        "max_num_seqs": args.max_num_seqs or prof["max_num_seqs"],
-        "tool_parser": args.tool_parser or prof["tool_parser"],
-        "reasoning_parser": args.reasoning_parser or prof["reasoning_parser"],
-        "output_tokens": prof["output_tokens"],
-    }
+def serve_args(args: argparse.Namespace) -> list[str]:
+    """CLI serving flags to forward to vllm-serve.sh. Unset = vLLM default."""
+    out = ["--model", args.model]
+    if args.max_model_len:
+        out += ["--max-model-len", str(args.max_model_len)]
+    if args.max_num_seqs:
+        out += ["--max-num-seqs", str(args.max_num_seqs)]
+    if args.kv_cache_dtype:
+        out += ["--kv-cache-dtype", args.kv_cache_dtype]
+    if args.tool_parser:
+        out += ["--tool-parser", args.tool_parser]
+    if args.reasoning_parser:
+        out += ["--reasoning-parser", args.reasoning_parser]
+    return out
 
 
 async def submit_first(cluster: str, sbatch_args: list[str],
@@ -213,8 +208,7 @@ def server_max_len(port: int) -> int | None:
     return int(m.group(1)) if m else None
 
 
-def patch_opencode_config(port: int, model: str, context: int | None = None,
-                          output_tokens: int = 8192) -> Path:
+def patch_opencode_config(port: int, model: str, context: int | None = None) -> Path:
     """Ensure ~/.config/opencode/opencode.jsonc has the vllm provider."""
     cfg = Path.home() / ".config" / "opencode" / "opencode.jsonc"
     cfg.parent.mkdir(parents=True, exist_ok=True)
@@ -235,7 +229,7 @@ def patch_opencode_config(port: int, model: str, context: int | None = None,
         "npm": "@ai-sdk/openai-compatible",
         "name": "vLLM (DRAC)",
         "options": {"baseURL": f"http://localhost:{port}/v1"},
-        "models": {model: {"name": model, "limit": {"context": context, "output": output_tokens}}},
+        "models": {model: {"name": model, "limit": {"context": context, "output": OUTPUT_TOKENS}}},
     }
     cfg.write_text(json.dumps(data, indent=2) + "\n")
     print(f"patched {cfg} (backup .bak): provider.vllm -> http://localhost:{port}/v1")
@@ -330,7 +324,6 @@ def start_tunnel(cluster: str, node: str, port: int) -> subprocess.Popen | None:
 async def main() -> None:
     args = parse_args()
     port, model = args.port, args.model
-    cfg = resolve(model, args)
 
     if args.no_submit:
         cached = newest_cached_job()
@@ -348,12 +341,8 @@ async def main() -> None:
             raise SystemExit("--no-submit but no cached cluv jobs found.")
     else:
         sbatch_args = [a if a.startswith("-") else f"--{a}" for a in args.sbatch_arg]
-        program_args = ["--model", model, "--max-model-len", str(cfg["max_model_len"]),
-                        "--max-num-seqs", str(cfg["max_num_seqs"]),
-                        "--tool-parser", cfg["tool_parser"],
-                        "--reasoning-parser", cfg["reasoning_parser"]]
         cluster, job_id = await submit_first(args.cluster, sbatch_args,
-                                             program_args, autocommit=args.autocommit)
+                                             serve_args(args), autocommit=args.autocommit)
 
     node = await get_node(cluster, job_id)
 
@@ -366,7 +355,7 @@ async def main() -> None:
     if not args.no_tunnel:
         start_tunnel(cluster, node, port)
 
-    patch_opencode_config(port, model, output_tokens=cfg["output_tokens"])
+    patch_opencode_config(port, model)
 
     print(http_get(f"http://localhost:{port}/v1/models")[:300])
     print(f"\ncompute: ssh {cluster}  # then: curl http://{node}:{port}/v1/models")

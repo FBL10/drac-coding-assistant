@@ -4,9 +4,8 @@
 Idempotent — skips steps that are already done. Runs on login nodes via cluv.
 
 Usage:
-    uv run --with cluster-uv scripts/setup.py --clusters rorqual,tamia,nibi
-    uv run --with cluster-uv scripts/setup.py --clusters fir --model Qwen/Qwen3.8-27B-FP8
-    uv run --with cluster-uv scripts/setup.py --clusters trillium-gpu --check-only
+    uv run --with cluster-uv scripts/setup.py --clusters rorqual,tamia,nibi --model Qwen/Qwen3.8-27B-FP8
+    uv run --with cluster-uv scripts/setup.py --clusters fir --model Qwen/Qwen3.8-27B-FP8 --check-only
 """
 
 from __future__ import annotations
@@ -21,8 +20,6 @@ except ModuleNotFoundError:
     print("Re-run with:\n  uv run --with cluster-uv scripts/setup.py ...", file=sys.stderr)
     raise SystemExit(2)
 
-MODEL = "Qwen/Qwen3.8-27B-FP8"
-REVISION = "017b9c7a83ded25d6c687b8c521bb72403f6bb65"  # pinned snapshot (~29 GB)
 VLLM_VERSION = "0.29.0"
 
 
@@ -30,8 +27,9 @@ def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--clusters", default="rorqual,tamia,nibi",
                    help="comma-separated cluv cluster names")
-    p.add_argument("--model", default=MODEL)
-    p.add_argument("--revision", default=REVISION)
+    p.add_argument("--model", required=True, help="HF model id to cache")
+    p.add_argument("--revision", default=None,
+                   help="optional pinned snapshot revision (omit = latest)")
     p.add_argument("--vllm-version", default=VLLM_VERSION)
     p.add_argument("--venv", default=None, help="default: $SCRATCH/vllm-env (-313 on trillium-gpu)")
     p.add_argument("--python", default=None, help="e.g. 3.13 (default: cluster default, 3.13 on trillium-gpu)")
@@ -70,7 +68,9 @@ if [[ -d "$CACHED" ]]; then
     echo "weights already cached, skipping download"
 else
     VIRTUAL_ENV="$VENV" uv pip install -q huggingface_hub
-    "$VENV/bin/huggingface-cli" download "$MODEL" --revision "$REV"
+    if [[ -n "$REV" && "$REV" != "-" ]]; then REV_FLAG="--revision $REV"; else REV_FLAG=""; fi
+    # shellcheck disable=SC2086
+    "$VENV/bin/huggingface-cli" download "$MODEL" $REV_FLAG
 fi
 echo "vllm: $(ver_dir || echo "missing (install may have failed)")"
 """
@@ -83,7 +83,7 @@ async def setup_one(cluster: str, args: argparse.Namespace) -> bool:
     except Exception as e:
         print(f"{cluster}: connect failed: {e}", file=sys.stderr)
         return False
-    cmd = (f"CLUSTER={cluster} bash -s -- {args.model} {args.revision} "
+    cmd = (f"CLUSTER={cluster} bash -s -- {args.model} {args.revision or '-'} "
            f"{args.vllm_version} {args.venv or '-'} {args.python or '-'} "
            f"{1 if args.check_only else 0}")
     try:
@@ -106,7 +106,7 @@ async def main() -> None:
         ok = await setup_one(c, args) and ok
     if not ok:
         raise SystemExit(1)
-    print("done. Next: uv run --with cluster-uv scripts/serve-and-code.py --launch")
+    print(f"done. Next: uv run --with cluster-uv scripts/serve-and-code.py --model {args.model} --launch")
 
 
 if __name__ == "__main__":

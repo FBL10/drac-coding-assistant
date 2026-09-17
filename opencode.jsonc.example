@@ -1,15 +1,17 @@
 {
   // Copy to ~/.config/opencode/opencode.jsonc (or let scripts/serve-and-code.py patch it).
-  // serve-and-code.py manages provider.vllm automatically; this is the shape it writes.
+  // serve-and-code.py manages provider.vllm automatically: it sets the model you
+  // pass via --model and autodetects the context limit from /v1/models.
+  // Replace <MODEL_ID> and <CONTEXT_TOKENS> if you write this file by hand.
   "provider": {
     "vllm": {
       "npm": "@ai-sdk/openai-compatible",
       "name": "vLLM (DRAC)",
       "options": { "baseURL": "http://localhost:8000/v1" },
       "models": {
-        "Qwen/Qwen3.8-27B-FP8": {
-          "name": "Qwen/Qwen3.8-27B-FP8",
-          "limit": { "context": 262144, "output": 8192 }
+        "<MODEL_ID>": {
+          "name": "<MODEL_ID>",
+          "limit": { "context": "<CONTEXT_TOKENS>", "output": 8192 }
         }
       }
     }

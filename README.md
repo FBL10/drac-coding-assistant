@@ -4,8 +4,10 @@ Serve an LLM with [vLLM](https://github.com/vllm-project/vllm) on DRAC H100
 clusters and point [OpenCode](https://opencode.ai) at it. Cluster orchestration
 via [cluv](https://github.com/mila-iqia/cluv) (`cluster-uv` on PyPI).
 
-Default model: `Qwen/Qwen3.8-27B-FP8` at 256k context × 32 concurrent
-sequences on 4×H100 single-node. Other models work via flags (see Usage).
+No model is hardcoded: you pass `--model` everywhere, and serving flags
+(`--max-model-len`, `--max-num-seqs`, `--kv-cache-dtype`, `--tool-parser`,
+`--reasoning-parser`) are forwarded to vLLM only when set. The examples below
+use `Qwen/Qwen3.8-27B-FP8` at 256k context × 32 seqs on 4×H100 single-node.
 
 ## Cluster status
 
@@ -35,29 +37,34 @@ Installs the vLLM venv (`$SCRATCH/vllm-env`, pinned vLLM) and downloads model
 weights to `$SCRATCH/.cache/huggingface` on the login node (idempotent):
 
 ```bash
-uv run --with cluster-uv scripts/setup.py --clusters rorqual,tamia,nibi
-uv run --with cluster-uv scripts/setup.py --clusters fir --check-only  # status only
+uv run --with cluster-uv scripts/setup.py --clusters rorqual,tamia,nibi --model Qwen/Qwen3.8-27B-FP8
+uv run --with cluster-uv scripts/setup.py --clusters fir --model Qwen/Qwen3.8-27B-FP8 --check-only
 ```
 
 ## Usage
 
 ```bash
+MODEL=Qwen/Qwen3.8-27B-FP8
+
 # submit, wait for endpoint, tunnel, patch opencode config, launch opencode:
-uv run --with cluster-uv scripts/serve-and-code.py --launch
+uv run --with cluster-uv scripts/serve-and-code.py --model $MODEL \
+  --max-model-len 262144 --max-num-seqs 32 --kv-cache-dtype fp8 \
+  --tool-parser qwen3_coder --reasoning-parser qwen3 --launch
 
-# target one cluster / another model:
-uv run --with cluster-uv scripts/serve-and-code.py --cluster nibi --launch
-uv run --with cluster-uv scripts/serve-and-code.py --model Qwen/Qwen2.5-32B --max-model-len 32768 --launch
+# minimal (vLLM defaults for everything except the model):
+uv run --with cluster-uv scripts/serve-and-code.py --model $MODEL --launch
 
-# reuse the newest ready job without resubmitting:
-uv run --with cluster-uv scripts/serve-and-code.py --no-submit --launch
+# target one cluster / reuse the newest ready job:
+uv run --with cluster-uv scripts/serve-and-code.py --model $MODEL --cluster nibi --launch
+uv run --with cluster-uv scripts/serve-and-code.py --model $MODEL --no-submit --launch
 
 # extra sbatch overrides (repeatable):
-uv run --with cluster-uv scripts/serve-and-code.py --launch --sbatch-arg gpus=h100:8
+uv run --with cluster-uv scripts/serve-and-code.py --model $MODEL --launch --sbatch-arg gpus=h100:8
 ```
 
-Per-model defaults live in `MODELS` at the top of `scripts/serve-and-code.py`;
-`scripts/vllm-serve.sh` accepts `--model/--max-model-len/--max-num-seqs/--tp/--port/--tool-parser/--reasoning-parser`.
+`scripts/vllm-serve.sh` accepts the same serving flags
+(`--model/--max-model-len/--max-num-seqs/--tp/--port/--kv-cache-dtype/--tool-parser/--reasoning-parser`).
+The opencode context limit is autodetected from `/v1/models`.
 
 ## Notes / troubleshooting
 

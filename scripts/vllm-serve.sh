@@ -5,9 +5,10 @@
 #   cluv submit first                    # race enabled H100 clusters
 #   cluv submit rorqual
 #   sbatch --gpus=h100:4 --cpus-per-task=12 --mem=64G --account=YOUR-ACCOUNT scripts/vllm-serve.sh
-# Options (also settable via env MODEL/PORT/MAX_MODEL_LEN/MAX_NUM_SEQS/TP_SIZE/TOOL_PARSER):
-#   scripts/vllm-serve.sh [--model M] [--max-model-len N] [--max-num-seqs N]
-#                         [--tp N] [--port P] [--tool-parser P] [--reasoning-parser P]
+# All serving options are opt-in (flags or env); unset = vLLM default.
+#   scripts/vllm-serve.sh --model HF-ORG/HF-NAME [--max-model-len N] [--max-num-seqs N]
+#                         [--tp N] [--port P] [--kv-cache-dtype D]
+#                         [--tool-parser P] [--reasoning-parser P]
 set -euo pipefail
 export PYTHONUNBUFFERED=1
 
@@ -17,7 +18,7 @@ if command -v module &>/dev/null; then
     || module load cuda 2>/dev/null || true
 fi
 
-MODEL="${MODEL:-Qwen/Qwen3.8-27B-FP8}"
+MODEL="${MODEL:-}"
 PORT="${PORT:-8000}"
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -26,22 +27,23 @@ while [[ $# -gt 0 ]]; do
         --tp|--tensor-parallel-size) TP_SIZE="$2"; shift 2;;
         --port) PORT="$2"; shift 2;;
         --model) MODEL="$2"; shift 2;;
+        --kv-cache-dtype) KV_CACHE_DTYPE="$2"; shift 2;;
         --tool-parser) TOOL_PARSER="$2"; shift 2;;
         --reasoning-parser) REASONING_PARSER="$2"; shift 2;;
-        --help) echo "usage: vllm-serve.sh [--model M] [--max-model-len N] [--max-num-seqs N] [--tp N] [--port P] [--tool-parser P] [--reasoning-parser P]"; exit 0;;
+        --help) echo "usage: vllm-serve.sh --model M [--max-model-len N] [--max-num-seqs N] [--tp N] [--port P] [--kv-cache-dtype D] [--tool-parser P] [--reasoning-parser P]"; exit 0;;
         *) MODEL="$1"; shift;;
     esac
 done
+if [[ -z "$MODEL" ]]; then
+    echo "error: no model given (pass --model or set MODEL)" >&2
+    exit 2
+fi
 if command -v nvidia-smi &>/dev/null; then
     N_GPUS=$(nvidia-smi -L 2>/dev/null | wc -l | tr -d ' ')
 else
     N_GPUS=1
 fi
 TP_SIZE="${TP_SIZE:-$N_GPUS}"
-# Default serving shape for Qwen3.8-27B-FP8: 256k context x 32 seqs.
-# KV memory scales as len x seqs; other models override via flags above.
-MAX_MODEL_LEN="${MAX_MODEL_LEN:-262144}"
-MAX_NUM_SEQS="${MAX_NUM_SEQS:-32}"
 
 if [[ "${HF_HUB_OFFLINE:-0}" == "1" ]]; then
     export TRANSFORMERS_OFFLINE=1
@@ -65,9 +67,6 @@ echo "date: $(date -u +%FT%TZ)  host: $(hostname)  model: $MODEL  tp=$TP_SIZE  p
 echo "CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-<all>}"
 nvidia-smi -L || true
 
-TOOL_PARSER="${TOOL_PARSER:-qwen3_coder}"
-REASONING_PARSER="${REASONING_PARSER:-qwen3}"
-
 # Prefer the setup-script venv, fall back to PATH.
 if [[ -x "${VLLM_BIN:-$SCRATCH/vllm-env/bin/vllm}" ]]; then
     VLLM_BIN="${VLLM_BIN:-$SCRATCH/vllm-env/bin/vllm}"
@@ -76,17 +75,22 @@ else
 fi
 echo "vllm binary: $VLLM_BIN ($("$VLLM_BIN" --version 2>/dev/null || echo 'version unknown'))"
 
+# Only pass serving flags the user set; the rest are vLLM defaults.
+EXTRA_ARGS=()
+if [[ -n "${MAX_MODEL_LEN:-}" ]]; then EXTRA_ARGS+=(--max-model-len "$MAX_MODEL_LEN"); fi
+if [[ -n "${MAX_NUM_SEQS:-}" ]]; then EXTRA_ARGS+=(--max-num-seqs "$MAX_NUM_SEQS"); fi
+if [[ -n "${KV_CACHE_DTYPE:-}" ]]; then EXTRA_ARGS+=(--kv-cache-dtype "$KV_CACHE_DTYPE"); fi
+if [[ -n "${TOOL_PARSER:-}" ]]; then
+    EXTRA_ARGS+=(--enable-auto-tool-choice --tool-call-parser "$TOOL_PARSER")
+fi
+if [[ -n "${REASONING_PARSER:-}" ]]; then EXTRA_ARGS+=(--reasoning-parser "$REASONING_PARSER"); fi
+
 # shellcheck disable=SC2086
 "$VLLM_BIN" serve "$MODEL" \
     --host 0.0.0.0 \
     --port "$PORT" \
     --tensor-parallel-size "$TP_SIZE" \
-    --max-model-len "$MAX_MODEL_LEN" \
-    --max-num-seqs "$MAX_NUM_SEQS" \
-    --kv-cache-dtype fp8 \
-    --enable-auto-tool-choice \
-    --tool-call-parser "$TOOL_PARSER" \
-    --reasoning-parser "$REASONING_PARSER" &
+    "${EXTRA_ARGS[@]}" &
 VLLM=$!
 
 # Arm the idle killswitch only after the endpoint answers: 256k loads sit at
