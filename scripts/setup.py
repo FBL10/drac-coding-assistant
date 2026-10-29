@@ -39,6 +39,9 @@ def parse_args() -> argparse.Namespace:
 
 SETUP_SCRIPT = r"""
 set -u
+# uv lives in ~/.local/bin, which interactive shells add to PATH but cluv's
+# non-interactive session does NOT (tamia 652931: silent "uv: command not found").
+export PATH="$HOME/.local/bin:$PATH"
 MODEL="$1"; REV="$2"; VLLM_VER="$3"; VENV_IN="${4:-}"; PY_IN="${5:-}"; CHECK_ONLY="${6:-0}"
 if [[ "$VENV_IN" == "-" ]]; then VENV_IN=""; fi
 if [[ "$PY_IN" == "-" ]]; then PY_IN=""; fi
@@ -51,23 +54,40 @@ fi
 export HF_HOME="${HF_HOME:-$SCRATCH/.cache/huggingface}"
 CACHED="$HF_HOME/hub/models--${MODEL//\//--}"
 echo "--- $CLUSTER: venv=$VENV vllm=$VLLM_VER model=$MODEL ---"
-ver_dir() { ls -d "$VENV/lib/python"*/site-packages/vllm-"$VLLM_VER".dist-info 2>/dev/null | head -n 1; }
+ver_dir() {
+    # Must NOT be a bare pipeline: `ls | head` returns head's exit status (always 0),
+    # which masked MISSING installs as an empty-but-successful "vllm: " line.
+    local d
+    d="$(ls -d "$VENV/lib/python"*/site-packages/vllm-"$VLLM_VER".dist-info 2>/dev/null | head -n 1)"
+    [[ -n "$d" ]] || return 1
+    echo "$d"
+}
 if [[ "$CHECK_ONLY" == 1 ]]; then
-    if [[ -n "$(ver_dir)" ]]; then echo "vllm: $VLLM_VER OK ($(ver_dir))"; else echo "vllm: MISSING (want $VLLM_VER)"; fi
+    if ver_dir; then echo "vllm: $VLLM_VER OK"; else echo "vllm: MISSING (want $VLLM_VER)"; fi
     if [[ -d "$CACHED" ]]; then echo "weights: $CACHED"; else echo "weights: MISSING"; fi
     exit 0
 fi
-if [[ -n "$(ver_dir)" ]]; then
+UV_BIN=$(command -v uv || true)
+if [[ -z "$UV_BIN" ]]; then
+    echo "ERROR: uv not found in PATH (looked in ~/.local/bin too); install it on this cluster first" >&2
+    exit 1
+fi
+if ver_dir; then
     echo "vllm $VLLM_VER already installed, skipping"
 else
     if [[ -n "$PY" ]]; then UVPY="--python $PY"; else UVPY=""; fi
     # shellcheck disable=SC2086
-    uv venv "$VENV" $UVPY && VIRTUAL_ENV="$VENV" uv pip install "vllm==$VLLM_VER"
+    "$UV_BIN" venv "$VENV" $UVPY || { echo "ERROR: uv venv $VENV failed" >&2; exit 1; }
+    VIRTUAL_ENV="$VENV" "$UV_BIN" pip install "vllm==$VLLM_VER" || {
+        echo "ERROR: vllm==$VLLM_VER install failed" >&2
+        # Force a nonzero exit even under `set -e`-free pipelines so setup.py reports failure.
+        exit 1
+    }
 fi
 if [[ -d "$CACHED" ]]; then
     echo "weights already cached, skipping download"
 else
-    VIRTUAL_ENV="$VENV" uv pip install -q huggingface_hub
+    VIRTUAL_ENV="$VENV" "$UV_BIN" pip install -q huggingface_hub
     if [[ -n "$REV" && "$REV" != "-" ]]; then REV_FLAG="--revision $REV"; else REV_FLAG=""; fi
     # shellcheck disable=SC2086
     "$VENV/bin/huggingface-cli" download "$MODEL" $REV_FLAG
@@ -89,9 +109,9 @@ async def setup_one(cluster: str, args: argparse.Namespace) -> bool:
     try:
         res = await remote.run(cmd, input=SETUP_SCRIPT, display=False, hide=True)
         print(res.stdout)
-        if res.returncode != 0:
+        if res.returncode != 0 or res.stderr.strip():
             print(f"{cluster}: exit {res.returncode}\n{res.stderr}", file=sys.stderr)
-            return False
+            return res.returncode == 0
         return True
     except Exception as e:
         print(f"{cluster}: setup failed: {e}", file=sys.stderr)
